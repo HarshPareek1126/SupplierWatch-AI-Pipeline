@@ -1,0 +1,338 @@
+{
+  "name": "SupplierWatch - 02 Daily Digest",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 8
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        0
+      ],
+      "id": "8640c2a9-573e-407a-8d9e-65d8d32dc51a",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "supplierwatch_events",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "created_at",
+              "condition": "gte",
+              "keyValue": "={{ $now.minus({hours: 24}).toISO() }}"
+            },
+            {
+              "keyName": "risk_score",
+              "condition": "gte",
+              "keyValue": "20"
+            },
+            {
+              "keyName": "risk_score",
+              "condition": "lt",
+              "keyValue": "45"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        224,
+        0
+      ],
+      "id": "fe1f3e4d-63e8-47b0-91db-aa28657c5223",
+      "name": "Get many rows",
+      "credentials": {
+        "supabaseApi": {
+          "id": "C50ehISQ48FadGnn",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "destinationFieldName": "events ",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        464,
+        0
+      ],
+      "id": "44ce1b3d-a819-44c0-be34-c5490f3fdbec",
+      "name": "Aggregate"
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "={{ $json.message }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1280,
+        160
+      ],
+      "id": "2d3315a3-1255-4d00-9d32-7ca04797ff0e",
+      "name": "Send a text message",
+      "webhookId": "5a29570d-8706-4df5-97cd-dab76e36a24a",
+      "credentials": {
+        "telegramApi": {
+          "id": "f6HdReH1aSUpX4bf",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $('Get many rows').all().map(i => i.json).filter(r => r && r.id);\n\nif (!rows.length) {\n  return [{ json: { empty: true, count: 0, text: '📋 SupplierWatch Daily Digest: no medium-risk events in the last 24 hours.' } }];\n}\n\nrows.sort((a, b) => b.risk_score - a.risk_score);\nconst top = rows.slice(0, 15);\n\nconst lines = top.map((r, i) =>\n  `${i + 1}. [${r.supplier}] ${r.title} | type: ${r.event_type} | risk: ${r.risk_score} | ${r.reason}`);\nconst plain = top.map((r, i) =>\n  `${i + 1}. ${r.supplier}: ${r.title} (risk ${r.risk_score})`).join('\\n');\n\nconst prompt = 'You are a procurement risk analyst. Write a short executive summary (max 120 words) of these supplier events from the last 24 hours. Put the most important first and say what to watch. Plain text only.\\n\\n' + lines.join('\\n');\n\nreturn [{ json: { empty: false, count: rows.length, prompt, plain } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        656,
+        0
+      ],
+      "id": "eb805429-e146-42ea-b6be-8fd590bd6ee4",
+      "name": "Build Prompt"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "8531554f-af59-4f93-9058-4ca5260cdb4b",
+              "leftValue": "={{ $json.empty }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        880,
+        0
+      ],
+      "id": "7a7b8d03-660b-4641-9952-663f2dc29d92",
+      "name": "Has events?"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.prompt }}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        1248,
+        -224
+      ],
+      "id": "e64fb5dc-cc52-4b2a-bda6-450798b6f506",
+      "name": "AI Summary",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "model": "gemma2:2b",
+        "options": {
+          "temperature": 0
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [
+        1248,
+        -16
+      ],
+      "id": "af2dd2a8-2a25-43f4-bc96-6b241b5a58fd",
+      "name": "Ollama Chat Model",
+      "credentials": {
+        "ollamaApi": {
+          "id": "hLEDe9zjlNI7RRXI",
+          "name": "Ollama account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const ai = String($json.output || $json.text || '').trim();\nconst base = $('Build Prompt').first().json;\nconst body = ai.length > 20 ? ai : base.plain;\n\n// Telegram reads * _ ` [ ] as formatting. Remove them so the send can't fail.\nconst clean = String(body)\n  .replace(/^#+[ \\t]*/gm, '')\n  .replace(/^[ \\t]*[*•][ \\t]+/gm, '- ')\n  .replace(/[*`\\[\\]]/g, '')\n  .replace(/_/g, ' ');\n\nreturn [{ json: { text: ('📋 SupplierWatch Daily Digest (' + base.count + ' events)\\n\\n' + clean).slice(0, 3900) } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1616,
+        -160
+      ],
+      "id": "b7a511a2-6b29-4f4f-ae2c-216aec59daa4",
+      "name": "Final message"
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "={{ $json.text }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1856,
+        -240
+      ],
+      "id": "58b5fad8-f57f-4056-a26d-65cb581dbb1c",
+      "name": "Send a text message1",
+      "webhookId": "d2c93f73-dca8-4729-8e87-f6a7fcb25eed",
+      "retryOnFail": true,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "telegramApi": {
+          "id": "f6HdReH1aSUpX4bf",
+          "name": "Telegram account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get many rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get many rows": {
+      "main": [
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate": {
+      "main": [
+        [
+          {
+            "node": "Build Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Prompt": {
+      "main": [
+        [
+          {
+            "node": "Has events?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has events?": {
+      "main": [
+        [
+          {
+            "node": "AI Summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ollama Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Summary",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Summary": {
+      "main": [
+        [
+          {
+            "node": "Final message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Final message": {
+      "main": [
+        [
+          {
+            "node": "Send a text message1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "GqPcUpIgztsjm4oO",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true
+  },
+  "versionId": "aaf2dfe9-1dd4-420b-9471-9502ee5f4384",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "9613cf5e42e363540a7233613df9e940104bf603708b420678ca67bf622091a0"
+  },
+  "nodeGroups": [],
+  "id": "vYsPBBdQUVtf2fFW",
+  "tags": []
+}

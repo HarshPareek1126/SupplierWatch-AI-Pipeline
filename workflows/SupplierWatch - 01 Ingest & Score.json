@@ -1,0 +1,724 @@
+{
+  "name": "SupplierWatch - 01 Ingest & Score",
+  "nodes": [
+    {
+      "parameters": {
+        "url": "=\n{{ 'https://news.google.com/rss/search?q=' + encodeURIComponent($json.query + ' when:2d') + '&hl=en-US&gl=US&ceid=US:en' }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.2,
+      "position": [
+        560,
+        16
+      ],
+      "id": "33491975-11e5-4883-b4a1-71ec6210c162",
+      "name": "RSS Read"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nreturn [\n    {\n        \"json\": {\n            \"supplier\": \"TSMC\",\n            \"query\": \"TSMC semiconductor supply chain\"\n        }\n    },\n    {\n        \"json\": {\n            \"supplier\": \"Intel\",\n            \"query\": \"Intel semiconductor supply chain\"\n        }\n    },\n    {\n        \"json\": {\n            \"supplier\": \"Samsung Electronics\",\n            \"query\": \"Samsung Electronics supply chain\"\n        }\n    }\n]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        112,
+        176
+      ],
+      "id": "fa87c8bf-90af-48ad-bc3f-9de9443b272c",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        384,
+        224
+      ],
+      "id": "8bb72049-28ec-41e8-94df-142eb3e36bdb",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map(item => {\n  return {\n    json: {\n      supplier: item.json.supplier || $('Loop Over Items').first().json.name || '',\n      query: item.json.query || '',\n      processed_at: new Date().toISOString()\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        656,
+        224
+      ],
+      "id": "40f6a965-af73-4c4e-bb80-05a1bce6d1df",
+      "name": "Normalize News"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8000/normalize",
+        "sendBody": true,
+        "contentType": "=json",
+        "specifyBody": "json",
+        "bodyParameters": {
+          "parameters": [
+            {}
+          ]
+        },
+        "jsonBody": "={{ JSON.stringify({\n  articles: $input.first().json.articles.map(article => ({\n    supplier: $('Loop Over Items').first().json.supplier || $('Code in JavaScript').first().json.supplier || \"\",\n    title: article.title || \"\",\n    link: article.link || article.url || \"\",\n    pubDate: article.pubDate || \"\",\n    contentSnippet: article.contentSnippet || \"\"\n  }))\n}) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1056,
+        -48
+      ],
+      "id": "bfff788e-6848-488b-a3c2-80a2f40f3d55",
+      "name": "Normalize News1"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "articles",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        944,
+        304
+      ],
+      "id": "b7dbaa57-316a-4d4e-a5e4-879076e463ba",
+      "name": "Split Normalized Articles"
+    },
+    {
+      "parameters": {
+        "maxItems": 20
+      },
+      "type": "n8n-nodes-base.limit",
+      "typeVersion": 1,
+      "position": [
+        1824,
+        -160
+      ],
+      "id": "2f24f604-358f-47ce-8152-9818f9e181af",
+      "name": "Limit"
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "destinationFieldName": "articles",
+        "options": {
+          "includeBinaries": false
+        }
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        784,
+        16
+      ],
+      "id": "75041811-50a7-45f3-abf6-272abfcea3aa",
+      "name": "Aggregate"
+    },
+    {
+      "parameters": {
+        "jsCode": "const aliases = {\n  tsmc: ['tsmc', 'taiwan semiconductor'],\n};\nconst negativeKeywords = ['recipe', 'fruit', 'unboxing'];\n\nreturn $input.all().filter(item => {\n  const title = (item.json.title || '').toLowerCase();\n  const supplier = (item.json.supplier || '').toLowerCase();\n  const names = aliases[supplier] || (supplier ? [supplier] : []);\n\n  const matchesSupplier = names.length ? names.some(n => title.includes(n)) : true;\n  const hasNegative = negativeKeywords.some(neg => title.includes(neg));\n\n  return matchesSupplier && !hasNegative;\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        -128
+      ],
+      "id": "dffd9b80-33b6-4f93-a014-36a94695cd03",
+      "name": "Filter Irrelevant News"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a supply-chain risk analyst. Classify this headline about the supplier '{{ $json.supplier }}'.\n\nTitle: '{{ $json.title }}'\n\nRules:\n- Classify only what the headline explicitly states. Do not guess.\n- If the headline reports something that really happened or was officially announced and could disrupt the supplier or its supply chain, it is a real event. Use one of the event types below and a severity of 2 to 5.\n- Use \"not_relevant\" ONLY for opinion, analysis, questions, forecasts, product news or general business news with no concrete risk event.\n- Never use \"not_relevant\" if your own reason describes a real event.\n\nEvent types:\n- layoff, lawsuit, breach, bankruptcy, recall, leadership_change\n- disruption: natural disaster, fire, power outage, factory halt or shutdown, strike, sanctions, export ban\n- other: any other real event that doesn't fit above\n\nSeverity: 1 = no risk, 2 = minor, 3 = moderate, 4 = serious, 5 = critical (bankruptcy, major breach, plant shutdown)\n\nExamples:\nTitle: 'Supplier halts main factory after earthquake' -> {\"event_type\":\"disruption\",\"severity\":4,\"confidence\":0.9,\"reason\":\"Factory production stopped after a natural disaster.\"}\nTitle: 'Does buying a toolmaker reduce geographic risk?' -> {\"event_type\":\"not_relevant\",\"severity\":1,\"confidence\":0.9,\"reason\":\"Opinion question, no concrete event.\"}\n\nReturn only a raw JSON object with no extra text:\n{ \"event_type\": \"layoff\" | \"lawsuit\" | \"breach\" | \"bankruptcy\" | \"recall\" | \"leadership_change\" | \"disruption\" | \"other\" | \"not_relevant\", \"severity\": 1 to 5, \"confidence\": 0.0 to 1.0, \"reason\": \"one short sentence\" }",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        2000,
+        -160
+      ],
+      "id": "f7168eaa-c747-49ce-a33d-790331a7a9b1",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": "qwen2.5:1.5b",
+        "options": {
+          "think": false,
+          "temperature": 0,
+          "format": "json"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [
+        2032,
+        80
+      ],
+      "id": "0619a40d-53ee-4b50-acbe-591b6f04ebba",
+      "name": "Ollama Chat Model",
+      "credentials": {
+        "ollamaApi": {
+          "id": "hLEDe9zjlNI7RRXI",
+          "name": "Ollama account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const metaByUrl = new Map(\n  $('Add hash').all().map(i => [i.json.url, i.json])\n);\n\nconst toISO = (d) => {\n  const t = new Date(d);\n  return isNaN(t.getTime()) ? null : t.toISOString();\n};\n\nreturn $input.all().map((item, i) => {\n  const src = $('Filter Irrelevant News').itemMatching(i).json;\n  const meta = metaByUrl.get(src.url) || {};\n\n  let aiData = {};\n  try {\n    const raw = String(item.json.output || '');\n    aiData = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));\n  } catch (e) {\n    aiData = { severity: 1, confidence: 0, event_type: 'error', reason: 'Failed to parse LLM' };\n  }\n\n  const severity = Math.min(5, Math.max(1, Number(aiData.severity) || 1));\n  const rawConf = Number(aiData.confidence);\n  const confidence = Number.isFinite(rawConf) ? Math.min(1, Math.max(0, rawConf)) : 0.5;\n  const criticality = 4;\n\n  const riskScore = Math.round(100 * ((severity - 1) / 4) * (criticality / 5) * confidence);\n\n  return {\n    json: {\n      source_hash: src.source_hash || meta.source_hash,\n      supplier: src.supplier,\n      title: src.title,\n      url: src.url,\n      published_at: toISO(src.published_at || meta.published_at),\n      event_type: aiData.event_type || 'other',\n      severity,\n      risk_score: riskScore,\n      reason: aiData.reason || 'No reason provided'\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2336,
+        -32
+      ],
+      "id": "830cb631-5cca-41e7-9685-dcf6dee2d7cd",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "tableId": "supplierwatch_events",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "source_hash",
+              "fieldValue": "={{ $json.source_hash }}"
+            },
+            {
+              "fieldId": "supplier",
+              "fieldValue": "={{ $json.supplier }}"
+            },
+            {
+              "fieldId": "title",
+              "fieldValue": "={{ $json.title }}"
+            },
+            {
+              "fieldId": "url",
+              "fieldValue": "={{ $json.url }}"
+            },
+            {
+              "fieldId": "published_at",
+              "fieldValue": "={{ $json.published_at }}"
+            },
+            {
+              "fieldId": "event_type",
+              "fieldValue": "={{ $json.event_type }}"
+            },
+            {
+              "fieldId": "severity",
+              "fieldValue": "={{ $json.severity }}"
+            },
+            {
+              "fieldId": "risk_score",
+              "fieldValue": "={{ $json.risk_score }}"
+            },
+            {
+              "fieldId": "reason",
+              "fieldValue": "={{ $json.reason }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2800,
+        -304
+      ],
+      "id": "1b19e1ea-edcf-46e9-8a4d-da8b0c69d017",
+      "name": "Create a row1",
+      "credentials": {
+        "supabaseApi": {
+          "id": "C50ehISQ48FadGnn",
+          "name": "Supabase account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "267375ce-ae8a-4912-aab5-bec1c2b46c12",
+              "leftValue": "={{ $json.risk_score }}",
+              "rightValue": "={{ 45 }}",
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2992,
+        -112
+      ],
+      "id": "1e606d35-6b32-49ff-8d6a-cd45b6349c1a",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "=🚨 HIGH RISK SUPPLIER ALERT 🚨\n\nSupplier: {{ $json.supplier }}\nEvent type: {{ String($json.event_type).replace(/_/g, ' ') }}\nRisk score: {{ $json.risk_score }}/100\nReason: {{ String($json.reason).replace(/[*_`\\[\\]]/g, ' ') }}\nRead more: {{ String($json.url).replace(/_/g, '%5F') }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        3312,
+        -240
+      ],
+      "id": "72955703-651c-4811-906a-d5c76173556f",
+      "name": "Send a text message",
+      "webhookId": "35a28b85-3151-45ca-8cf7-42489c844b82",
+      "retryOnFail": true,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "telegramApi": {
+          "id": "f6HdReH1aSUpX4bf",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "supplierwatch_seen",
+        "returnAll": true,
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "source_hash",
+              "condition": "eq",
+              "keyValue": "={{ $json.source_hash }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1264,
+        -112
+      ],
+      "id": "e1e9b788-883b-4436-8b8f-6aafd0689702",
+      "name": "Get many rows",
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "retryOnFail": true,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "supabaseApi": {
+          "id": "C50ehISQ48FadGnn",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const seen = new Set($('Get many rows').all().map(i => i.json.source_hash).filter(Boolean));\nconst cutoff = Date.now() - 48 * 60 * 60 * 1000;\nconst out = [];\n\nfor (const item of $('Add hash').all()) {\n  const h = item.json.source_hash;\n  if (seen.has(h)) continue;\n  const t = new Date(item.json.published_at).getTime();\n  if (!isNaN(t) && t < cutoff) continue;\n  seen.add(h);\n  out.push(item);\n}\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        -128
+      ],
+      "id": "24cc5167-c31e-455e-b38b-dfa98109652a",
+      "name": "Drop Seen"
+    },
+    {
+      "parameters": {
+        "tableId": "supplierwatch_seen",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "=source_hash",
+              "fieldValue": "={{ $json.url.hash('sha256') }}"
+            },
+            {
+              "fieldId": "=supplier",
+              "fieldValue": "={{ $json.supplier }}"
+            },
+            {
+              "fieldId": "=title",
+              "fieldValue": "={{ $json.title }}"
+            },
+            {
+              "fieldId": "=url",
+              "fieldValue": "={{ $json.url }}"
+            },
+            {
+              "fieldId": "published_at",
+              "fieldValue": "={{ $json.published_at }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2736,
+        16
+      ],
+      "id": "32df685b-d53c-44e0-94af-606f2cae8677",
+      "name": "Create a row",
+      "credentials": {
+        "supabaseApi": {
+          "id": "C50ehISQ48FadGnn",
+          "name": "Supabase account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "71c8f4da-2b04-4268-ad68-9bebab49f5e0",
+              "name": "source_hash",
+              "value": "={{ $json.url.hash('sha256') }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1136,
+        304
+      ],
+      "id": "bd463c7c-56fa-46d5-bc97-b007c3cd343a",
+      "name": "Add hash"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 3,
+              "triggerAtMinute": 30
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -128,
+        160
+      ],
+      "id": "56d8869f-6779-4ea1-b2c6-8ade018f89fb",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "adaf6362-970d-4a57-b335-8e14305fb9a5",
+              "leftValue": "={{ $json.event_type }}",
+              "rightValue": "not_relevant",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2576,
+        -208
+      ],
+      "id": "a3999c3d-362d-4ef5-b42d-0e6493d3aafa",
+      "name": "Is Relevant?"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "RSS Read",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Normalize News",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize News": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RSS Read": {
+      "main": [
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize News1": {
+      "main": [
+        [
+          {
+            "node": "Split Normalized Articles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Normalized Articles": {
+      "main": [
+        [
+          {
+            "node": "Add hash",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Limit": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate": {
+      "main": [
+        [
+          {
+            "node": "Normalize News1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Irrelevant News": {
+      "main": [
+        [
+          {
+            "node": "Limit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ollama Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Is Relevant?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Create a row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create a row1": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get many rows": {
+      "main": [
+        [
+          {
+            "node": "Drop Seen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drop Seen": {
+      "main": [
+        [
+          {
+            "node": "Filter Irrelevant News",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create a row": {
+      "main": [
+        []
+      ]
+    },
+    "Add hash": {
+      "main": [
+        [
+          {
+            "node": "Get many rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Relevant?": {
+      "main": [
+        [
+          {
+            "node": "Create a row1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true,
+    "errorWorkflow": "GqPcUpIgztsjm4oO"
+  },
+  "versionId": "d445a454-913e-4830-ad97-eb55330a3c74",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "9613cf5e42e363540a7233613df9e940104bf603708b420678ca67bf622091a0"
+  },
+  "nodeGroups": [],
+  "id": "HNlGQyFwq5OPOQzV",
+  "tags": []
+}

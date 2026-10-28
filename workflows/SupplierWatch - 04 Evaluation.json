@@ -1,0 +1,208 @@
+{
+  "name": "SupplierWatch - 04 Evaluation",
+  "nodes": [
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "={{ $json.message }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1280,
+        0
+      ],
+      "id": "79208f91-770b-4605-be82-cdc1a67197ea",
+      "name": "Send a text message",
+      "webhookId": "4101b179-7129-42c9-9f28-55468c748995",
+      "credentials": {
+        "telegramApi": {
+          "id": "f6HdReH1aSUpX4bf",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "1e6fd645-41d8-43a5-a55e-e359ccba1b54",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "supplierwatch_eval",
+        "returnAll": true
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        224,
+        0
+      ],
+      "id": "aa3151da-451a-49ff-89d6-0dbb7d780bf9",
+      "name": "Get Evals Rows",
+      "credentials": {
+        "supabaseApi": {
+          "id": "C50ehISQ48FadGnn",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a supply-chain risk analyst. Classify this headline about the supplier '{{ $json.supplier }}'.\n\nTitle: '{{ $json.title }}'\n\nRules:\n- Classify only what the headline explicitly states. Do not guess.\n- If the headline reports something that really happened or was officially announced and could disrupt the supplier or its supply chain, it is a real event. Use one of the event types below and a severity of 2 to 5.\n- Use \"not_relevant\" ONLY for opinion, analysis, questions, forecasts, product news or general business news with no concrete risk event.\n- Never use \"not_relevant\" if your own reason describes a real event.\n\nEvent types:\n- layoff, lawsuit, breach, bankruptcy, recall, leadership_change\n- disruption: natural disaster, fire, power outage, factory halt or shutdown, strike, sanctions, export ban\n- other: any other real event that doesn't fit above\n\nSeverity: 1 = no risk, 2 = minor, 3 = moderate, 4 = serious, 5 = critical (bankruptcy, major breach, plant shutdown)\n\nExamples:\nTitle: 'Supplier halts main factory after earthquake' -> {\"event_type\":\"disruption\",\"severity\":4,\"confidence\":0.9,\"reason\":\"Factory production stopped after a natural disaster.\"}\nTitle: 'Does buying a toolmaker reduce geographic risk?' -> {\"event_type\":\"not_relevant\",\"severity\":1,\"confidence\":0.9,\"reason\":\"Opinion question, no concrete event.\"}\n\nReturn only a raw JSON object with no extra text:\n{ \"event_type\": \"layoff\" | \"lawsuit\" | \"breach\" | \"bankruptcy\" | \"recall\" | \"leadership_change\" | \"disruption\" | \"other\" | \"not_relevant\", \"severity\": 1 to 5, \"confidence\": 0.0 to 1.0, \"reason\": \"one short sentence\" }",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        640,
+        0
+      ],
+      "id": "e08a671f-3e75-45c8-a011-709fdd0caa60",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": "gemma2:2b",
+        "options": {
+          "think": false,
+          "temperature": 0,
+          "format": "json"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [
+        624,
+        240
+      ],
+      "id": "f06e4214-41ae-4c2d-ab12-33134bd67a58",
+      "name": "Ollama Chat Model",
+      "credentials": {
+        "ollamaApi": {
+          "id": "hLEDe9zjlNI7RRXI",
+          "name": "Ollama account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const PROMPT_VERSION = 'v2';\nconst rows = $('Only labeled').all();\nconst preds = $input.all();\n\nlet tp = 0, fp = 0, fn = 0, tn = 0, typeHit = 0, typeN = 0, bad = 0;\nconst wrong = [];\n\npreds.forEach((p, i) => {\n  const src = (rows[i] || {}).json || {};\n  let ai = {};\n  try {\n    const raw = String(p.json.output || p.json.text || '');\n    ai = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));\n  } catch (e) { bad++; ai = { event_type: 'parse_error' }; }\n\n  const expEvent = src.expected_type !== 'not_relevant';\n  const predEvent = ai.event_type !== 'not_relevant' && ai.event_type !== 'parse_error';\n\n  if (expEvent && predEvent) tp++;\n  else if (!expEvent && predEvent) fp++;\n  else if (expEvent && !predEvent) fn++;\n  else tn++;\n\n  if (expEvent) { typeN++; if (ai.event_type === src.expected_type) typeHit++; }\n  if (expEvent !== predEvent) {\n    wrong.push((expEvent ? 'MISSED: ' : 'FALSE ALARM: ') + String(src.title || '').slice(0, 70));\n  }\n});\n\nconst n = preds.length;\nconst pct = (a, b) => b ? Math.round(100 * a / b) + '%' : 'n/a';\nconst warn = rows.length === n ? '' : '\\nWARNING: ' + rows.length + ' rows but ' + n + ' answers, results unreliable.';\n\nconst message = (\n  'EVALUATION (prompt ' + PROMPT_VERSION + ')\\n' +\n  'Headlines tested: ' + n + '\\n' +\n  'Accuracy: ' + pct(tp + tn, n) + '\\n' +\n  'Precision: ' + pct(tp, tp + fp) + '\\n' +\n  'Recall: ' + pct(tp, tp + fn) + '\\n' +\n  'Event type correct: ' + pct(typeHit, typeN) + '\\n' +\n  'Counts: tp ' + tp + ', fp ' + fp + ', fn ' + fn + ', tn ' + tn + ', unreadable ' + bad +\n  warn + '\\n\\n' +\n  (wrong.slice(0, 8).join('\\n') || 'No mistakes found.')\n).replace(/[*_`\\[\\]]/g, ' ').slice(0, 3900);\n\nreturn [{ json: { message, tp, fp, fn, tn, n } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1056,
+        0
+      ],
+      "id": "b672f5cd-be4a-40bd-a36d-cd59471eee12",
+      "name": "Score",
+      "executeOnce": false
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().filter(i => i.json.expected_type);"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        0
+      ],
+      "id": "b826f5a0-0a75-4ae6-851d-07b3a4fd8213",
+      "name": "Only labeled"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Get Evals Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Evals Rows": {
+      "main": [
+        [
+          {
+            "node": "Only labeled",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ollama Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Only labeled": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "versionId": "af8c52b6-fc51-4d7d-b1b4-85d9dc9b7868",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "9613cf5e42e363540a7233613df9e940104bf603708b420678ca67bf622091a0"
+  },
+  "nodeGroups": [],
+  "id": "oZ6WUAnjKPMGIphT",
+  "tags": []
+}

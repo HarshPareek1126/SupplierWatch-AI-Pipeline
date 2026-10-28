@@ -1,0 +1,90 @@
+{
+  "name": "SupplierWatch - 03 Error Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "46d61cbf-0790-4f55-8dd6-eb81d9d18610",
+      "name": "Error Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "const e = $input.first().json;\nconst wf = (e.workflow && e.workflow.name) || 'unknown workflow';\nconst node = (e.execution && e.execution.lastNodeExecuted) || 'unknown node';\nconst msg = (e.execution && e.execution.error && e.execution.error.message) || 'no message';\nconst url = (e.execution && e.execution.url) || '';\nconst text = ('⚠️ SupplierWatch ERROR\\nWorkflow: ' + wf + '\\nNode: ' + node + '\\nError: ' + msg + (url ? '\\nOpen: ' + url : ''))\n  .replace(/[*_`\\[\\]]/g, ' ').slice(0, 3900);\nreturn [{ json: { text } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ],
+      "id": "76d8a502-141f-4bfc-89c3-3cc981d3afe5",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "={{ $json.text }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        448,
+        0
+      ],
+      "id": "f1c92f1a-656b-4857-9aaa-baef249774bd",
+      "name": "Send a text message",
+      "webhookId": "ea0d5b93-0997-43f6-a7e8-def47f9ad89e",
+      "credentials": {
+        "telegramApi": {
+          "id": "f6HdReH1aSUpX4bf",
+          "name": "Telegram account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "versionId": "252f4741-8df6-4154-8a4a-a7a7a833cb4b",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "9613cf5e42e363540a7233613df9e940104bf603708b420678ca67bf622091a0"
+  },
+  "nodeGroups": [],
+  "id": "GqPcUpIgztsjm4oO",
+  "tags": []
+}
